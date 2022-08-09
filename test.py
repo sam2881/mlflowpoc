@@ -1,7 +1,5 @@
 import subprocess
 
-import git
-
 
 def get_most_recent_git_tag():
     try:

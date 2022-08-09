@@ -14,9 +14,10 @@ from sklearn.linear_model import ElasticNet
 from urllib.parse import urlparse
 import mlflow
 import mlflow.sklearn
-# import dvc.api
+import dvc.api
 import logging
-# from test import get_most_recent_git_tag
+from test import get_most_recent_git_tag
+import gdrivefs
 logging.basicConfig(level=logging.WARN)
 logger = logging.getLogger(__name__)
 
@@ -31,12 +32,12 @@ path = 'data/winequality-red.csv'
 repo = 'https://github.com/sam2881/mlflowdemo.git'
 
 
-# data_url = dvc.api.get_url(
-#     path=path,
-#     )
-# print(data_url)
-#
-# tag = get_most_recent_git_tag
+data_url = dvc.api.get_url(
+    path=path,
+    )
+print(data_url)
+
+tag = get_most_recent_git_tag
 
 def eval_metrics(actual, pred):
     rmse = np.sqrt(mean_squared_error(actual, pred))
@@ -51,16 +52,16 @@ if __name__ == "__main__":
     np.random.seed(40)
 
     # Read the wine-quality csv file from the URL
-    csv_url = (
-        "http://archive.ics.uci.edu/ml/machine-learning-databases/wine-quality/winequality-red.csv"
-    )
-    try:
-        data = pd.read_csv(csv_url, sep=";")
-    except Exception as e:
-        logger.exception(
-            "Unable to download training & test CSV, check your internet connection. Error: %s", e
-        )
-    # data = pd.read_csv(data_url)
+    # csv_url = (
+    #     "http://archive.ics.uci.edu/ml/machine-learning-databases/wine-quality/winequality-red.csv"
+    # )
+    # try:
+    #     data = pd.read_csv(csv_url, sep=";")
+    # except Exception as e:
+    #     logger.exception(
+    #         "Unable to download training & test CSV, check your internet connection. Error: %s", e
+    #     )
+    data = pd.read_csv(data_url)
     # Split the data into training and test sets. (0.75, 0.25) split.
     train, test = train_test_split(data)
 
@@ -93,8 +94,8 @@ if __name__ == "__main__":
         mlflow.log_metric("r2", r2)
         mlflow.log_metric("mae", mae)
 
-        # mlflow.log_param('data_url', data_url)
-        # mlflow.log_param('tag', tag)
+        mlflow.log_param('data_url', data_url)
+        mlflow.log_param('tag', tag)
         mlflow.log_param('input_rows', data.shape[0])
         mlflow.log_param('input_cols', data.shape[1])
 

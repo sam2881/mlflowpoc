@@ -1,4 +1,6 @@
 [core]
-    remote = storge
+    remote = remote_storge
 ['remote "storge"']
-    url = gdrive://1LobjUBeeHlaSh2KfpM8Uhv7ryAVaaagB
+    url = gs://dvcmlflow
+['remote "remote_storge"']
+    url = ../remotestorage
