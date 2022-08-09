@@ -1,0 +1,4 @@
+[core]
+    remote = storge
+['remote "storge"']
+    url = gdrive://1LobjUBeeHlaSh2KfpM8Uhv7ryAVaaagB
