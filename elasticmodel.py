@@ -16,8 +16,8 @@ import mlflow
 import mlflow.sklearn
 import dvc.api
 import logging
-from test import get_most_recent_git_tag
-import gdrivefs
+
+import subprocess
 logging.basicConfig(level=logging.WARN)
 logger = logging.getLogger(__name__)
 
@@ -37,13 +37,24 @@ data_url = dvc.api.get_url(
     )
 print(data_url)
 
-tag = get_most_recent_git_tag
+
+
+
 
 def eval_metrics(actual, pred):
     rmse = np.sqrt(mean_squared_error(actual, pred))
     mae = mean_absolute_error(actual, pred)
     r2 = r2_score(actual, pred)
     return rmse, mae, r2
+
+def get_most_recent_git_tag():
+    try:
+        git_tag = str(
+            subprocess.check_output(['git', 'describe', '--abbrev=0'], stderr=subprocess.STDOUT)
+        ).strip('\'b\\n')
+    except subprocess.CalledProcessError as exc_info:
+        raise Exception(str(exc_info.output))
+    return git_tag
 
 
 if __name__ == "__main__":
@@ -95,7 +106,7 @@ if __name__ == "__main__":
         mlflow.log_metric("mae", mae)
 
         mlflow.log_param('data_url', data_url)
-        mlflow.log_param('tag', tag)
+        mlflow.log_param('tag', get_most_recent_git_tag())
         mlflow.log_param('input_rows', data.shape[0])
         mlflow.log_param('input_cols', data.shape[1])
 

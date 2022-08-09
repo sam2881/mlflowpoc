@@ -11,4 +11,4 @@ def get_most_recent_git_tag():
     return git_tag
 
 
-print(get_most_recent_git_tag())
+# print(get_most_recent_git_tag())
