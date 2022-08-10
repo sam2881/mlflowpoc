@@ -12,33 +12,21 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import ElasticNet
 from urllib.parse import urlparse
-import mlflow
 import mlflow.sklearn
 import dvc.api
 import logging
 
-import subprocess
 logging.basicConfig(level=logging.WARN)
 logger = logging.getLogger(__name__)
 
-# os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = 'secrets/mlflowpoc-954453dc1b99.json'
-
-
-client = storage.Client()
 mlflow.set_tracking_uri("postgresql://postgres:mysecretpassword@127.0.0.1:5432/mlflow")
-
 
 path = 'data/winequality-red.csv'
 repo = 'https://github.com/sam2881/mlflowdemo.git'
 
-
-data_url = dvc.api.get_url(
-    path=path,
-    )
+# =================================================================
+data_url = dvc.api.get_url(path=path)
 print(data_url)
-
-
-
 
 
 def eval_metrics(actual, pred):
@@ -46,15 +34,6 @@ def eval_metrics(actual, pred):
     mae = mean_absolute_error(actual, pred)
     r2 = r2_score(actual, pred)
     return rmse, mae, r2
-
-def get_most_recent_git_tag():
-    try:
-        git_tag = str(
-            subprocess.check_output(['git', 'describe', '--abbrev=0'], stderr=subprocess.STDOUT)
-        ).strip('\'b\\n')
-    except subprocess.CalledProcessError as exc_info:
-        raise Exception(str(exc_info.output))
-    return git_tag
 
 
 if __name__ == "__main__":
@@ -106,7 +85,7 @@ if __name__ == "__main__":
         mlflow.log_metric("mae", mae)
 
         mlflow.log_param('data_url', data_url)
-        mlflow.log_param('tag', get_most_recent_git_tag())
+        # mlflow.log_param('tag', get_most_recent_git_tag())
         mlflow.log_param('input_rows', data.shape[0])
         mlflow.log_param('input_cols', data.shape[1])
 
@@ -127,4 +106,3 @@ if __name__ == "__main__":
             mlflow.sklearn.log_model(lr, "model", registered_model_name="ElasticnetWineModel")
         else:
             mlflow.sklearn.log_model(lr, "model")
-
