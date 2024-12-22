@@ -1,0 +1,181 @@
+from datetime import datetime, timedelta
+import re
+
+def get_table_list(trino_hook, maintenance_table):
+    """
+    Fetch the list of tables from the maintenance table.
+
+    Input:
+        - trino_hook: Trino connection hook.
+        - maintenance_table: Dictionary with keys `catalog_name`, `schema_name`, `table_name`.
+    
+    Output:
+        - List of tuples: Each tuple contains `catalog_name`, `schema_name`, `table_name`, `partition_column`, `snapshotdays`, `orphanfilesdays`.
+    """
+    fetch_query = f"""
+        SELECT catalog_name, schema_name, table_name, partition_column, snapshotdays, orphanfilesdays
+        FROM {maintenance_table['catalog_name']}.{maintenance_table['schema_name']}.{maintenance_table['table_name']}
+    """
+    print("Fetching tables from the maintenance table...")
+    table_list = trino_hook.get_records(fetch_query)
+
+    if not table_list:
+        print("No tables found in the maintenance table.")
+    return table_list
+
+def get_partition_column(partition_data):
+    """
+    Extract the first key (partition column) from the partition data.
+
+    Input:
+        - partition_data: String in the format `{key=value, key=value}`.
+
+    Output:
+        - String: First key (e.g., `year_month`).
+    """
+    match = re.search(r"(\w+)=", partition_data)
+    return match.group(1) if match else None
+
+def get_partitions_in_batches(trino_hook, catalog_name, schema_name, table_name, batch_size=100, filter_clause=None):
+    """
+    Fetch partition values in batches for large tables with optional filtering.
+
+    Input:
+        - trino_hook: Trino connection hook.
+        - catalog_name: Catalog name of the table.
+        - schema_name: Schema name of the table.
+        - table_name: Table name.
+        - batch_size: Number of partitions to fetch per batch.
+        - filter_clause: SQL WHERE clause for filtering partitions.
+
+    Output:
+        - Generator: Yields lists of partition strings.
+    """
+    offset = 0
+    while True:
+        where_clause = f"WHERE {filter_clause}" if filter_clause else ""
+        partition_query = f"""
+            SELECT partition
+            FROM {catalog_name}.{schema_name}.{table_name}$partitions
+            {where_clause}
+            LIMIT {batch_size} OFFSET {offset}
+        """
+        print(f"Executing query: {partition_query}")
+        result = trino_hook.get_records(partition_query)
+        if not result:
+            break  # No more partitions to fetch
+        yield [row[0] for row in result]  # Return only the 'partition' column
+        offset += batch_size
+
+def update_maintenance_table(trino_hook, catalog_name, schema_name, table_name, values):
+    """
+    Update the maintenance table with new values.
+
+    Input:
+        - trino_hook: Trino connection hook.
+        - catalog_name: Catalog name of the maintenance table.
+        - schema_name: Schema name of the maintenance table.
+        - table_name: Maintenance table name.
+        - values: List of value tuples to insert into the table.
+
+    Output:
+        - Updates the maintenance table; no return value.
+    """
+    delete_query = f"DELETE FROM {catalog_name}.{schema_name}.{table_name}"
+    print("Deleting old records from the maintenance table...")
+    trino_hook.run(delete_query)
+
+    if not values:
+        print("No values to insert into the maintenance table.")
+        return
+
+    insert_query = f"""
+        INSERT INTO {catalog_name}.{schema_name}.{table_name} 
+        (catalog_name, schema_name, table_name, partition_column, snapshotdays, orphanfilesdays, load_ts) 
+        VALUES {', '.join(values)}
+    """
+    print("Inserting new records into the maintenance table...")
+    trino_hook.run(insert_query)
+
+def iceberg_table_maintenance_snapshot_orphanfiles(trino_hook, first_maintenance_table, second_maintenance_table):
+    """
+    Perform maintenance on Iceberg tables using two maintenance tables:
+    - The first table lists all tables and their default parameters.
+    - The second table overrides parameters and indicates active tables.
+
+    Input:
+        - trino_hook: Trino connection hook.
+        - first_maintenance_table: Dictionary with `catalog_name`, `schema_name`, `table_name`.
+        - second_maintenance_table: Dictionary with `catalog_name`, `schema_name`, `table_name`.
+
+    Output:
+        - Executes maintenance commands; no return value.
+    """
+    today = datetime.today()
+    last_month = (today.replace(day=1) - timedelta(days=1)).strftime("%Y%m")
+    two_months_ago = (today.replace(day=1) - timedelta(days=1)).replace(day=1).strftime("%Y%m")
+    last_60_days = (today - timedelta(days=60)).strftime("%Y-%m-%d")
+
+    table_list = get_table_list(trino_hook, first_maintenance_table)
+    if not table_list:
+        return
+
+    for record in table_list:
+        catalog_name, schema_name, table_name, partition_column, snapshotdays, orphanfilesdays = record
+
+        # Check active status and overrides from the second maintenance table
+        active_query = f"""
+            SELECT is_active, snapshotdays, orphanfilesdays
+            FROM {second_maintenance_table['catalog_name']}.{second_maintenance_table['schema_name']}.{second_maintenance_table['table_name']}
+            WHERE catalog_name = '{catalog_name}' AND schema_name = '{schema_name}' AND table_name = '{table_name}'
+        """
+        active_result = trino_hook.get_records(active_query)
+
+        if active_result:
+            is_active, active_snapshotdays, active_orphanfilesdays = active_result[0]
+            if is_active.lower() != 'y':
+                print(f"Skipping table {table_name}: marked as inactive in the second maintenance table.")
+                continue
+            # Override parameters from the second table
+            snapshotdays = active_snapshotdays
+            orphanfilesdays = active_orphanfilesdays
+
+        # Construct WHERE clause based on partition column type
+        if partition_column == "year_month":
+            filter_clause = f"year_month >= '{two_months_ago}'"
+        elif partition_column == "reporting_date":
+            filter_clause = f"reporting_date >= DATE('{last_60_days}')"
+        else:
+            print(f"Skipping table {table_name}: Unsupported partition column {partition_column}.")
+            continue
+
+        print(f"Dynamic WHERE clause for table {table_name}: {filter_clause}")
+
+        # Fetch partitions in batches and execute maintenance queries
+        for partition_batch in get_partitions_in_batches(trino_hook, catalog_name, schema_name, table_name, batch_size=100, filter_clause=filter_clause):
+            try:
+                optimize_query = f"""
+                    ALTER TABLE {catalog_name}.{schema_name}.{table_name} 
+                    EXECUTE OPTIMIZE (file_size_threshold => '256MB')
+                """
+                snapshot_expire_query = f"""
+                    ALTER TABLE {catalog_name}.{schema_name}.{table_name} 
+                    EXECUTE EXPIRE SNAPSHOTS (retention_threshold => '{snapshotdays}')
+                """
+                orphan_files_query = f"""
+                    ALTER TABLE {catalog_name}.{schema_name}.{table_name} 
+                    EXECUTE REMOVE ORPHAN FILES (retention_threshold => '{orphanfilesdays}')
+                """
+
+                print(f"Executing OPTIMIZE query for {table_name}...")
+                trino_hook.run(optimize_query)
+
+                print(f"Executing EXPIRE SNAPSHOTS query for {table_name}...")
+                trino_hook.run(snapshot_expire_query)
+
+                print(f"Executing REMOVE ORPHAN FILES query for {table_name}...")
+                trino_hook.run(orphan_files_query)
+
+            except Exception as e:
+                print(f"Error executing maintenance for table {table_name}: {e}")
+                continue
